@@ -1,22 +1,34 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
-    id("com.chaquo.python")
-    kotlin("plugin.serialization") version libs.versions.kotlin.get()
+    alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.chaquopy)
+}
+
+val engineVersion = file("../../app/config/constants.py").readLines()
+    .first { it.startsWith("VERSION") }
+    .substringAfter('"').substringBefore('"')
+
+val signing = Properties().apply {
+    rootProject.file("keystore.properties").takeIf(File::exists)?.inputStream()?.use(::load)
 }
 
 android {
-    namespace = "io.github.xiaoyouchr.ghostdownloader"
+    namespace = "com.xychr.ghostdownloader"
     compileSdk {
         version = release(37)
     }
 
     defaultConfig {
-        applicationId = "io.github.xiaoyouchr.ghostdownloader"
+        applicationId = "com.xychr.ghostdownloader"
         minSdk = 28
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        versionName = engineVersion
+        versionCode = engineVersion.substringBefore('-').split('.')
+            .map(String::toInt)
+            .let { (major, minor, patch) -> major * 10000 + minor * 100 + patch }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -25,11 +37,29 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = signing.getProperty("storeFile")?.let(rootProject::file)
+            storePassword = signing.getProperty("storePassword")
+            keyAlias = signing.getProperty("keyAlias")
+            keyPassword = signing.getProperty("keyPassword")
+            enableV1Signing = false
+            enableV2Signing = true
+            enableV3Signing = true
+        }
+    }
+
     buildTypes {
         release {
             optimization {
-                enable = false
+                enable = true
             }
+            signingConfig = signingConfigs.getByName("release").takeIf { it.storeFile != null }
+        }
+        create("benchmark") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
         }
     }
     compileOptions {
@@ -47,18 +77,6 @@ android {
     androidResources {
         generateLocaleConfig = true
     }
-    sourceSets {
-        getByName("main") {
-            // AGP 9 不收 Provider，用字面路径；任务依赖在下面 configureEach 里接
-            assets.srcDir("$projectDir/build/extension-assets")
-        }
-    }
-}
-
-// 浏览器扩展的 CRX 和桌面共用一份，别在 compose 下再放一个副本
-val syncExtensionAsset = tasks.register<Sync>("syncExtensionAsset") {
-    from("../../app/assets/chrome_extension.crx")
-    into(layout.buildDirectory.dir("extension-assets"))
 }
 
 val syncEngineSource = tasks.register<Sync>("syncEngineSource") {
@@ -82,7 +100,6 @@ val syncEngineSource = tasks.register<Sync>("syncEngineSource") {
     into(layout.buildDirectory.dir("python-engine/app"))
 }
 
-// View 文件不进 APK——Android 侧的卡片和设置界面是 Compose 写的
 val androidPacks = listOf(
     "http_pack", "ftp_pack", "github_pack", "huggingface_pack", "bittorrent_pack",
     "ed2k_pack", "ffmpeg_pack", "m3u8_pack", "yt_dlp_pack", "bili_pack",
@@ -109,9 +126,6 @@ val syncFeatureSource = tasks.register<Sync>("syncFeatureSource") {
 tasks.configureEach {
     if (name.contains("Python") && name.contains("merge", ignoreCase = true)) {
         dependsOn(syncEngineSource, syncFeatureSource)
-    }
-    if (name.startsWith("merge") && name.endsWith("Assets")) {
-        dependsOn(syncExtensionAsset)
     }
 }
 
@@ -140,20 +154,23 @@ chaquopy {
 }
 
 dependencies {
+    implementation(libs.backdrop)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)
-    implementation(libs.androidx.compose.material3.adaptive.navigation.suite)
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.navigation.compose)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.zxing.core)
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)
